@@ -14,7 +14,7 @@
 const int buttonPin = 26;
 
 // Global node identifier (adjust per device)
-uint8_t myID = 1;
+// uint8_t myID = 1;
 
 void setup() {
   Serial.begin(115200);
@@ -23,7 +23,7 @@ void setup() {
   Serial.println("LoRa Mesh Node Starting...");
 
   // Initialize button pin and relay pin (RELAY_PIN is defined in MeshFunctions.h as 27)
-  pinMode(buttonPin, INPUT_PULLUP);
+  pinMode(26, INPUT_PULLUP);
   pinMode(RELAY_PIN, OUTPUT);
   digitalWrite(RELAY_PIN, LOW);  // Ensure relay is off initially
 
@@ -36,16 +36,22 @@ void setup() {
     Serial.println("LoRa init failed. Check your connections.");
     while (true);
   }
+  LoRa.setSignalBandwidth(125E3);
+  LoRa.setSpreadingFactor(12);
+  LoRa.setCodingRate4(8);
   Serial.println("LoRa init succeeded.");
 }
 
 void loop() {
   // Check for and process any incoming LoRa packets
   handleIncomingPacket();
+  checkPendingAcks();
 
   // Update relay status (turn off relay after its duration has elapsed)
   updateRelay();
 
   // Check for button press and send message to node with ID 0x01 (or any other value you want)
   handleButtonPress(buttonPin , 0x02, CMD_OPEN_RELAY);
+
+  delay(10); // Small delay to prevent watchdog triggers
 }
