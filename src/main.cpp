@@ -14,7 +14,7 @@
 const int buttonPin = 26;
 
 // Global node identifier (adjust per device)
-uint8_t myID = 1;
+uint8_t myID = 2;
 
 void setup() {
   Serial.begin(115200);
@@ -47,5 +47,5 @@ void loop() {
   updateRelay();
 
   // Check for button press and send message to node with ID 0x01 (or any other value you want)
-  handleButtonPress(buttonPin , 0x02);
+  handleButtonPress(buttonPin , 0x01);
 }

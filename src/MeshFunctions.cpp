@@ -12,20 +12,23 @@ const unsigned long RELAY_DURATION = 1000; // 1 second
 
 // --- Mesh Functions Implementation ---
 
+// Generate a unique message ID combining the node's ID and the current millis() value.
 uint32_t generateUniqueID() {
-  // Combine the global node ID (myID) and the lower 24 bits of millis()
+    // Combine the global node ID (myID) and the lower 24 bits of millis()
   return ((uint32_t)myID << 24) | (millis() & 0x00FFFFFF);
 }
 
-void processMessage(String payload, uint32_t msgID, uint8_t src, uint8_t dest, uint8_t ttl) {
+// Process a received message contained in a MeshPacket.
+void processMessage(MeshPacket &packet) {
   Serial.print("Processing message from node ");
-  Serial.print(src);
+  Serial.print(packet.src);
   Serial.print(": ");
-  Serial.println(payload);
+  Serial.println(packet.payload);
   // Application-specific processing goes here.
   openRelay();
 }
 
+// Check if a message ID has been seen before.
 bool isDuplicate(uint32_t id) {
   for (int i = 0; i < recentMsgCount; i++) {
     if (recentMsgIDs[i] == id)
@@ -34,6 +37,7 @@ bool isDuplicate(uint32_t id) {
   return false;
 }
 
+// Add a message ID to the recent cache.
 void addRecentMsgID(uint32_t id) {
   if (recentMsgCount < MAX_RECENT_MSG) {
     recentMsgIDs[recentMsgCount++] = id;
@@ -46,39 +50,91 @@ void addRecentMsgID(uint32_t id) {
   }
 }
 
-void forwardMessage(uint32_t msgID, uint8_t src, uint8_t dest, uint8_t ttl, String payload) {
-  String msg = String(msgID) + "," + String(src) + "," + String(dest) + "," + String(ttl) + "," + payload;
-  Serial.print("Forwarding message: ");
-  Serial.println(msg);
-  LoRa.beginPacket();
-  LoRa.print(msg);
-  LoRa.endPacket();
+// Forward a message after decrementing its TTL.
+// The packet is passed by value so that the original packet remains unchanged.
+void forwardMessage(MeshPacket packet) {
+  if (packet.ttl > 0) {
+    packet.ttl--; // Decrement TTL for the forwarded message
+    String msg = serializePacket(packet);
+    Serial.print("Forwarding message: ");
+    Serial.println(msg);
+    LoRa.beginPacket();
+    LoRa.print(msg);
+    LoRa.endPacket();
+  }
 }
 
+// Send a message by creating a MeshPacket, serializing it, and transmitting.
 void sendMessage(uint8_t dest, String payload) {
-  uint32_t msgID = generateUniqueID();
-  uint8_t ttl = INITIAL_TTL;
-  String msg = String(msgID) + "," + String(myID) + "," + String(dest) + "," + String(ttl) + "," + payload;
+  MeshPacket packet;
+  packet.msgID = generateUniqueID();
+  packet.src = myID;
+  packet.dest = dest;
+  packet.ttl = INITIAL_TTL;
+  packet.payload = payload;
+
+  String msg = serializePacket(packet);
   Serial.print("Sending message: ");
   Serial.println(msg);
   LoRa.beginPacket();
   LoRa.print(msg);
   LoRa.endPacket();
-  addRecentMsgID(msgID);
+  addRecentMsgID(packet.msgID);
 }
 
+// Send an ACK packet to a node acknowledging receipt of a message.
 void sendAck(uint8_t dest, uint32_t msgID) {
-  String ackPayload = "ACK:" + String(msgID);
-  uint8_t ttl = 1; // ACKs use minimal TTL
-  String ackMsg = String(msgID) + "," + String(myID) + "," + String(dest) + "," + String(ttl) + "," + ackPayload;
+  MeshPacket packet;
+  packet.msgID = msgID; // Use the original message ID
+  packet.src = myID;
+  packet.dest = dest;
+  packet.ttl = 1; // Minimal TTL for ACK
+  packet.payload = "ACK:" + String(msgID);
+
+  String msg = serializePacket(packet);
   Serial.print("Sending ACK: ");
-  Serial.println(ackMsg);
+  Serial.println(msg);
   LoRa.beginPacket();
-  LoRa.print(ackMsg);
+  LoRa.print(msg);
   LoRa.endPacket();
 }
 
+// --- Packet Serialization Functions ---
+
+// Convert a MeshPacket into a CSV string: msgID,src,dest,ttl,payload
+String serializePacket(const MeshPacket &packet) {
+  return String(packet.msgID) + "," + 
+         String(packet.src) + "," + 
+         String(packet.dest) + "," + 
+         String(packet.ttl) + "," + 
+         packet.payload;
+}
+
+// Parse a CSV string into a MeshPacket.
+// Expected format: msgID,src,dest,ttl,payload
+MeshPacket deserializePacket(const String &data) {
+  MeshPacket packet;
+  int idx1 = data.indexOf(',');
+  int idx2 = data.indexOf(',', idx1 + 1);
+  int idx3 = data.indexOf(',', idx2 + 1);
+  int idx4 = data.indexOf(',', idx3 + 1);
+  
+  if (idx1 == -1 || idx2 == -1 || idx3 == -1 || idx4 == -1) {
+    Serial.println("Malformed packet");
+    return packet; // Returns a packet with default values.
+  }
+  
+  packet.msgID   = data.substring(0, idx1).toInt();
+  packet.src     = (uint8_t) data.substring(idx1 + 1, idx2).toInt();
+  packet.dest    = (uint8_t) data.substring(idx2 + 1, idx3).toInt();
+  packet.ttl     = (uint8_t) data.substring(idx3 + 1, idx4).toInt();
+  packet.payload = data.substring(idx4 + 1);
+  
+  return packet;
+}
+
 // --- Relay Control Functions ---
+
 void openRelay() {
   relayStartTime = millis();
   relayActive = true;
@@ -98,11 +154,10 @@ void updateRelay() {
   }
 }
 
-// --- New Helper Functions: Handling Incoming and Transmitted Data ---
+// --- Incoming Packet and Button Handling ---
 
-// This function checks for incoming LoRa packets, parses them,
-// and processes the message by calling processMessage(), sending ACKs,
-// and forwarding if necessary.
+// Check for incoming LoRa packets, deserialize them into MeshPacket,
+// check for duplicates, process the packet, send ACK if needed, and forward it.
 void handleIncomingPacket() {
   int packetSize = LoRa.parsePacket();
   if (packetSize) {
@@ -113,52 +168,32 @@ void handleIncomingPacket() {
     Serial.print("Received packet: ");
     Serial.println(incoming);
     
-    // Expected message format: msgID,src,dest,ttl,payload
-    int firstComma = incoming.indexOf(',');
-    int secondComma = incoming.indexOf(',', firstComma + 1);
-    int thirdComma = incoming.indexOf(',', secondComma + 1);
-    int fourthComma = incoming.indexOf(',', thirdComma + 1);
-    if (firstComma == -1 || secondComma == -1 || thirdComma == -1 || fourthComma == -1) {
-      Serial.println("Malformed message");
-      return;
-    }
+    MeshPacket packet = deserializePacket(incoming);
     
-    String idStr = incoming.substring(0, firstComma);
-    String srcStr = incoming.substring(firstComma + 1, secondComma);
-    String destStr = incoming.substring(secondComma + 1, thirdComma);
-    String ttlStr = incoming.substring(thirdComma + 1, fourthComma);
-    String payload = incoming.substring(fourthComma + 1);
-    
-    uint32_t msgID = idStr.toInt();
-    uint8_t src = (uint8_t)srcStr.toInt();
-    uint8_t dest = (uint8_t)destStr.toInt();
-    uint8_t ttl = (uint8_t)ttlStr.toInt();
-    
-    if (isDuplicate(msgID)) {
+    if (isDuplicate(packet.msgID)) {
       Serial.println("Duplicate message, ignoring");
       return;
     }
-    addRecentMsgID(msgID);
+    addRecentMsgID(packet.msgID);
     
-    // If the message is addressed to this node or is a broadcast (0xFF)
-    if (dest == myID || dest == 0xFF) {
-      processMessage(payload, msgID, src, dest, ttl);
+    // Process if the message is addressed to this node or is a broadcast (0xFF)
+    if (packet.dest == myID || packet.dest == 0xFF) {
+      processMessage(packet);
       // Send an ACK if the message is directly for this node
-      if (dest == myID) {
-        sendAck(src, msgID);
+      if (packet.dest == myID) {
+        sendAck(packet.src, packet.msgID);
       }
     }
     
-    // If TTL is still positive and the message isn’t exclusively for this node, forward it.
-    if (ttl > 0 && dest != myID) {
-      ttl--;
-      forwardMessage(msgID, src, dest, ttl, payload);
+    // Forward if TTL is positive and message is not exclusively for this node
+    if (packet.ttl > 0 && packet.dest != myID) {
+      forwardMessage(packet);
     }
   }
 }
 
-// This function handles button press debouncing and sends a message when pressed.
-void handleButtonPress(int buttonPin , uint8_t destID) {
+// Handle button press debouncing and send a message to the specified destination.
+void handleButtonPress(int buttonPin, uint8_t destID) {
   static bool lastButtonState = HIGH;
   bool reading = digitalRead(buttonPin);
   static unsigned long lastDebounceTime = 0;
@@ -171,11 +206,9 @@ void handleButtonPress(int buttonPin , uint8_t destID) {
     if (reading == LOW) {
       Serial.print("Button pressed, sending message to node ");
       Serial.println(destID);
-      // Example: send a message with destination 0x01
       sendMessage(destID, "Button Pressed from node " + String(myID));
       delay(200); // Prevent multiple triggers
     }
   }
   lastButtonState = reading;
 }
-
