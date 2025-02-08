@@ -1,11 +1,11 @@
 #include "MeshFunctions.h"
 #include <LoRa.h>
 
-// --- Global Variables for Duplicate Detection ---
+// --- Duplicate Detection Cache ---
 uint32_t recentMsgIDs[MAX_RECENT_MSG];
 int recentMsgCount = 0;
 
-// --- Global Variables for Relay Control ---
+// --- Relay Control Variables ---
 unsigned long relayStartTime = 0;
 bool relayActive = false;
 const unsigned long RELAY_DURATION = 1000; // 1 second
@@ -13,7 +13,7 @@ const unsigned long RELAY_DURATION = 1000; // 1 second
 // --- Mesh Functions Implementation ---
 
 uint32_t generateUniqueID() {
-  // Combine node ID (myID) and lower 24 bits of millis()
+  // Combine the global node ID (myID) and the lower 24 bits of millis()
   return ((uint32_t)myID << 24) | (millis() & 0x00FFFFFF);
 }
 
@@ -50,7 +50,6 @@ void forwardMessage(uint32_t msgID, uint8_t src, uint8_t dest, uint8_t ttl, Stri
   String msg = String(msgID) + "," + String(src) + "," + String(dest) + "," + String(ttl) + "," + payload;
   Serial.print("Forwarding message: ");
   Serial.println(msg);
-  // Note: LoRa transmission functions will be called from main.cpp where LoRa is initialized.
   LoRa.beginPacket();
   LoRa.print(msg);
   LoRa.endPacket();
@@ -70,7 +69,7 @@ void sendMessage(uint8_t dest, String payload) {
 
 void sendAck(uint8_t dest, uint32_t msgID) {
   String ackPayload = "ACK:" + String(msgID);
-  uint8_t ttl = 1; // ACKs need minimal forwarding
+  uint8_t ttl = 1; // ACKs use minimal TTL
   String ackMsg = String(msgID) + "," + String(myID) + "," + String(dest) + "," + String(ttl) + "," + ackPayload;
   Serial.print("Sending ACK: ");
   Serial.println(ackMsg);
@@ -79,8 +78,7 @@ void sendAck(uint8_t dest, uint32_t msgID) {
   LoRa.endPacket();
 }
 
-// --- New Relay Control Functions ---
-
+// --- Relay Control Functions ---
 void openRelay() {
   relayStartTime = millis();
   relayActive = true;
@@ -99,3 +97,85 @@ void updateRelay() {
     closeRelay();
   }
 }
+
+// --- New Helper Functions: Handling Incoming and Transmitted Data ---
+
+// This function checks for incoming LoRa packets, parses them,
+// and processes the message by calling processMessage(), sending ACKs,
+// and forwarding if necessary.
+void handleIncomingPacket() {
+  int packetSize = LoRa.parsePacket();
+  if (packetSize) {
+    String incoming = "";
+    while (LoRa.available()) {
+      incoming += (char)LoRa.read();
+    }
+    Serial.print("Received packet: ");
+    Serial.println(incoming);
+    
+    // Expected message format: msgID,src,dest,ttl,payload
+    int firstComma = incoming.indexOf(',');
+    int secondComma = incoming.indexOf(',', firstComma + 1);
+    int thirdComma = incoming.indexOf(',', secondComma + 1);
+    int fourthComma = incoming.indexOf(',', thirdComma + 1);
+    if (firstComma == -1 || secondComma == -1 || thirdComma == -1 || fourthComma == -1) {
+      Serial.println("Malformed message");
+      return;
+    }
+    
+    String idStr = incoming.substring(0, firstComma);
+    String srcStr = incoming.substring(firstComma + 1, secondComma);
+    String destStr = incoming.substring(secondComma + 1, thirdComma);
+    String ttlStr = incoming.substring(thirdComma + 1, fourthComma);
+    String payload = incoming.substring(fourthComma + 1);
+    
+    uint32_t msgID = idStr.toInt();
+    uint8_t src = (uint8_t)srcStr.toInt();
+    uint8_t dest = (uint8_t)destStr.toInt();
+    uint8_t ttl = (uint8_t)ttlStr.toInt();
+    
+    if (isDuplicate(msgID)) {
+      Serial.println("Duplicate message, ignoring");
+      return;
+    }
+    addRecentMsgID(msgID);
+    
+    // If the message is addressed to this node or is a broadcast (0xFF)
+    if (dest == myID || dest == 0xFF) {
+      processMessage(payload, msgID, src, dest, ttl);
+      // Send an ACK if the message is directly for this node
+      if (dest == myID) {
+        sendAck(src, msgID);
+      }
+    }
+    
+    // If TTL is still positive and the message isn’t exclusively for this node, forward it.
+    if (ttl > 0 && dest != myID) {
+      ttl--;
+      forwardMessage(msgID, src, dest, ttl, payload);
+    }
+  }
+}
+
+// This function handles button press debouncing and sends a message when pressed.
+void handleButtonPress(int buttonPin , uint8_t destID) {
+  static bool lastButtonState = HIGH;
+  bool reading = digitalRead(buttonPin);
+  static unsigned long lastDebounceTime = 0;
+  const unsigned long debounceDelay = 50;
+  
+  if (reading != lastButtonState) {
+    lastDebounceTime = millis();
+  }
+  if ((millis() - lastDebounceTime) > debounceDelay) {
+    if (reading == LOW) {
+      Serial.print("Button pressed, sending message to node ");
+      Serial.println(destID);
+      // Example: send a message with destination 0x01
+      sendMessage(destID, "Button Pressed from node " + String(myID));
+      delay(200); // Prevent multiple triggers
+    }
+  }
+  lastButtonState = reading;
+}
+

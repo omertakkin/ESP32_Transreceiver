@@ -3,18 +3,18 @@
 
 #include <Arduino.h>
 
-// --- Global Definitions ---
 #define MAX_RECENT_MSG 20
 extern uint8_t myID; // Global node identifier (defined in main.cpp)
 #define INITIAL_TTL 5
 
-// Define the relay pin and duration (use a unique name for the relay pin)
+// Define the relay pin (unique name for relay control)
 #define RELAY_PIN 27
+
 extern unsigned long relayStartTime;
 extern bool relayActive;
 extern const unsigned long RELAY_DURATION;
 
-// --- Function Prototypes for Mesh Functions ---
+// Function prototypes for mesh functions
 uint32_t generateUniqueID();
 void processMessage(String payload, uint32_t msgID, uint8_t src, uint8_t dest, uint8_t ttl);
 bool isDuplicate(uint32_t id);
@@ -23,9 +23,13 @@ void forwardMessage(uint32_t msgID, uint8_t src, uint8_t dest, uint8_t ttl, Stri
 void sendMessage(uint8_t dest, String payload);
 void sendAck(uint8_t dest, uint32_t msgID);
 
-// --- Relay Functions ---
-void openRelay();   // Activate the relay and record start time.
-void closeRelay();  // Deactivate the relay.
-void updateRelay(); // Check if the relay duration has elapsed and then close it.
+// Relay control functions
+void openRelay();
+void closeRelay();
+void updateRelay();
 
-#endif  // MESH_FUNCTIONS_H
+// New helper functions for organizing transmissions and receptions
+void handleIncomingPacket();
+void handleButtonPress(int buttonPin, uint8_t destID);
+
+#endif // MESH_FUNCTIONS_H
