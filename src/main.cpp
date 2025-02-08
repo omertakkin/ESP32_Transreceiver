@@ -1,7 +1,6 @@
 #include <SPI.h>
 #include <LoRa.h>
 #include "MeshFunctions.h"
-#include "WebConfig.h"
 
 // LoRa pins (adjust as needed)
 #define ss    5
@@ -18,11 +17,8 @@ const int buttonPin = 26;       // Button connected to pin 26
 
 // Use RELAY_PIN from MeshFunctions.h (defined as 27)
 
-// Add this after LoRa includes
-WebConfig webConfig;  // Now uses RELAY_PIN from MeshFunctions.h by default
-
 // Global node identifier (adjust per device)
-uint8_t myID = 1;
+uint8_t myID = 2;
 
 void setup() {
   Serial.begin(115200);
@@ -49,9 +45,7 @@ void setup() {
   Serial.println("LoRa init succeeded.");
 
   // Initialize recent messages cache is done in MeshFunctions.cpp constructor equivalent (if needed)
-  
-  // Initialize web configuration
-  webConfig.begin();
+
 }
 
 void loop() {
@@ -109,8 +103,6 @@ void loop() {
 
   // --- Update relay state ---
   updateRelay();
-  // Handle web requests
-  webConfig.handleClient();
   
   
   // --- Button handling ---
@@ -127,7 +119,7 @@ void loop() {
   if ((millis() - lastDebounceTime) > debounceDelay) {
     if (reading == LOW) {
       Serial.println("Button pressed (debounced)");
-      sendMessage(0x02, "Button Pressed from node " + String(myID));
+      sendMessage(0x01, "Button Pressed from node " + String(myID));
       // Wait a little to prevent multiple triggers
       delay(200);
     }
